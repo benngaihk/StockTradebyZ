@@ -1,0 +1,57 @@
+{
+  "selectors": [
+    {
+      "class": "BBIKDJSelector",
+      "alias": "少妇战法_优化版",
+      "activate": true,
+      "params": {
+        "j_threshold": 0.5,
+        "bbi_min_window": 15,
+        "max_window": 45,
+        "price_range_pct": 0.4,
+        "bbi_q_threshold": 0.15,
+        "j_q_threshold": 0.05
+      }
+    },
+    {
+      "class": "BBIShortLongSelector", 
+      "alias": "补票战法_优化版",
+      "activate": true,
+      "params": {
+        "n_short": 3,
+        "n_long": 21,
+        "m": 3,
+        "bbi_min_window": 3,
+        "max_window": 45,
+        "bbi_q_threshold": 0.25
+      }
+    },
+    {
+      "class": "BreakoutVolumeKDJSelector",
+      "alias": "TePu战法_优化版",
+      "activate": true,
+      "params": {
+        "j_threshold": 0.5,
+        "j_q_threshold": 0.05,
+        "up_threshold": 4.0,
+        "volume_threshold": 0.75,
+        "offset": 10,
+        "max_window": 45,
+        "price_range_pct": 0.4
+      }
+    },
+    {
+      "class": "BBIShortLongSelector",
+      "alias": "补票战法_保守版",
+      "activate": true,
+      "params": {
+        "n_short": 3,
+        "n_long": 21,
+        "m": 2,
+        "bbi_min_window": 5,
+        "max_window": 30,
+        "bbi_q_threshold": 0.3
+      }
+    }
+  ]
+} 

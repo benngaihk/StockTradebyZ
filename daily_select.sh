@@ -23,11 +23,24 @@ python fetch_kline.py \
   --workers 10
 
 echo ""
-echo "🎯 第二步：运行选股策略..."
+echo "🎯 第二步：运行原版选股策略..."
 python select_stock.py \
   --data-dir ./data \
   --config ./configs.json
 
 echo ""
-echo "✅ 选股完成！请查看输出结果和 select_results.log 文件"
-echo "📈 记得查看新选出的股票，并对比昨日结果" 
+echo "🚀 第三步：运行优化版选股策略..."
+python select_stock.py \
+  --data-dir ./data \
+  --config ./configs_optimized.json
+
+echo ""
+echo "📈 第四步：对比分析选股结果..."
+python compare_daily.py
+
+echo ""
+echo "✅ 选股完成！"
+echo "📋 总结："
+echo "   - 查看 select_results.log 了解详细日志"
+echo "   - 关注新选中的股票，避免追高已涨股票"
+echo "   - 建议结合多个策略分散风险" 
