@@ -8,12 +8,17 @@ import argparse
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 from collections import defaultdict, Counter
 
 import pandas as pd
 
-from select_stock import load_data, load_config, instantiate_selector
+from select_stock import (
+    load_data,
+    load_config,
+    instantiate_selector,
+    calculate_price_suggestions,
+)
 
 class StrategyBacktest:
     def __init__(self, data_dir: Path, config_path: Path):
@@ -44,34 +49,110 @@ class StrategyBacktest:
             
         return list(reversed(dates))
     
-    def _calculate_next_day_return(self, stock_code: str, select_date: datetime) -> float:
-        """计算选股后第二天的收益率"""
-        if stock_code not in self.data:
-            return 0.0
-            
-        df = self.data[stock_code]
-        df_sorted = df.sort_values('date')
-        
-        # 找到选股日期的位置
-        select_date_mask = df_sorted['date'].dt.date == select_date.date()
-        if not select_date_mask.any():
-            return 0.0
-            
-        select_idx = df_sorted[select_date_mask].index[0]
-        
-        # 找下一个交易日
-        next_idx = None
-        for i in range(select_idx + 1, len(df_sorted)):
-            next_idx = df_sorted.index[i]
-            break
-            
-        if next_idx is None:
-            return 0.0
-            
-        select_close = df_sorted.loc[select_idx, 'close']
-        next_close = df_sorted.loc[next_idx, 'close']
-        
-        return (next_close - select_close) / select_close * 100
+    def _simulate_trade(
+        self, stock_code: str, select_date: datetime, max_holding_days: int = 10
+    ) -> Dict[str, Any]:
+        """
+        模拟单次交易，根据入场、离场、止损建议.
+
+        Args:
+            stock_code: 股票代码
+            select_date: 选股日期
+            max_holding_days: 最长持股天数
+
+        Returns:
+            一个包含交易详情的字典，如收益率、持股天数等.
+        """
+        # 1. 获取价格建议
+        price_suggestions = calculate_price_suggestions(
+            stock_code, select_date, self.data
+        )
+        if price_suggestions["entry_price"] == 0:
+            return {"status": "no_suggestion", "return": 0.0}
+
+        entry_price = price_suggestions["entry_price"]
+        exit_price = price_suggestions["exit_price"]
+        stop_loss = price_suggestions["stop_loss"]
+
+        # 2. 找到选股日之后的数据
+        df = self.data.get(stock_code)
+        if df is None:
+            return {"status": "no_data", "return": 0.0}
+
+        trade_days = df[df["date"] > select_date].copy()
+        if trade_days.empty:
+            return {"status": "no_data_after", "return": 0.0}
+
+        # 3. 模拟交易: 寻找入场机会 (最多看未来5天)
+        entry_day_data = None
+        buy_price = 0.0
+        entry_day_index = -1
+
+        for i, (idx, day) in enumerate(trade_days.head(5).iterrows()):
+            # 条件：当日最低价 <= 建议入场价
+            if day["low"] <= entry_price:
+                entry_day_data = day
+                buy_price = entry_price  # 假设以建议入场价买入
+                entry_day_index = i
+                break
+
+        if entry_day_data is None:
+            return {"status": "no_entry", "return": 0.0}
+
+        # 找到入场日之后的数据进行监控
+        holding_days_df = trade_days.iloc[entry_day_index + 1 :]
+
+        # 4. 寻找出场或止损机会
+        holding_period = 0
+        for _, day in holding_days_df.iterrows():
+            holding_period += 1
+
+            # 止盈条件：当日最高价 >= 建议离场价
+            if day["high"] >= exit_price:
+                sell_price = exit_price  # 假设以建议离场价卖出
+                return {
+                    "status": "exit_profit",
+                    "return": (sell_price - buy_price) / buy_price * 100,
+                    "holding_days": holding_period,
+                    "entry_price": buy_price,
+                    "exit_price": sell_price,
+                }
+
+            # 止损条件：当日最低价 <= 建议止损价
+            if day["low"] <= stop_loss:
+                sell_price = stop_loss  # 假设以建议止损价卖出
+                return {
+                    "status": "stop_loss",
+                    "return": (sell_price - buy_price) / buy_price * 100,
+                    "holding_days": holding_period,
+                    "entry_price": buy_price,
+                    "exit_price": sell_price,
+                }
+
+            # 达到最长持股天数
+            if holding_period >= max_holding_days:
+                sell_price = day["close"]  # 以当日收盘价卖出
+                return {
+                    "status": "timeout",
+                    "return": (sell_price - buy_price) / buy_price * 100,
+                    "holding_days": holding_period,
+                    "entry_price": buy_price,
+                    "exit_price": sell_price,
+                }
+
+        # 如果循环结束仍未卖出（数据不足），则以最后一天的收盘价卖出
+        if not holding_days_df.empty:
+            last_day = holding_days_df.iloc[-1]
+            sell_price = last_day["close"]
+            return {
+                "status": "end_of_data",
+                "return": (sell_price - buy_price) / buy_price * 100,
+                "holding_days": holding_period + 1,
+                "entry_price": buy_price,
+                "exit_price": sell_price,
+            }
+
+        return {"status": "not_closed", "return": 0.0}
     
     def run_backtest(self, days: int = 100) -> None:
         """运行回测"""
@@ -101,15 +182,25 @@ class StrategyBacktest:
                     alias, selector = instantiate_selector(cfg)
                     picks = selector.select(trade_date, self.data)
                     
-                    # 计算次日收益
-                    returns = []
+                    # 模拟交易
+                    trades = []
                     for stock in picks:
-                        ret = self._calculate_next_day_return(stock, trade_date)
-                        returns.append(ret)
+                        trade_result = self._simulate_trade(stock, trade_date)
+                        if trade_result["status"] not in [
+                            "no_suggestion",
+                            "no_entry",
+                            "no_data_after",
+                            "not_closed",
+                            "no_data",
+                        ]:
+                            trades.append(trade_result)
                     
+                    returns = [t["return"] for t in trades]
+
                     daily_result['strategies'][alias] = {
                         'picks': picks,
                         'count': len(picks),
+                        'trades': trades,
                         'returns': returns,
                         'avg_return': sum(returns) / len(returns) if returns else 0.0,
                         'win_rate': sum(1 for r in returns if r > 0) / len(returns) if returns else 0.0
@@ -119,6 +210,7 @@ class StrategyBacktest:
                     daily_result['strategies'][cfg.get('alias', 'Unknown')] = {
                         'picks': [],
                         'count': 0,
+                        'trades': [],
                         'returns': [],
                         'avg_return': 0.0,
                         'win_rate': 0.0,
@@ -129,6 +221,18 @@ class StrategyBacktest:
         
         print("\n✅ 回测完成！")
     
+    @staticmethod
+    def _create_strategy_stats():
+        """Helper to initialize the stats dictionary for a strategy."""
+        return {
+            "total_picks": 0,
+            "total_days": 0,
+            "active_days": 0,
+            "all_trades": [],
+            "daily_counts": [],
+            "stock_frequency": Counter(),
+        }
+
     def analyze_results(self) -> None:
         """分析回测结果"""
         print("\n" + "="*80)
@@ -136,14 +240,7 @@ class StrategyBacktest:
         print("="*80)
         
         # 统计各策略表现
-        strategy_stats = defaultdict(lambda: {
-            'total_picks': 0,
-            'total_days': 0,
-            'active_days': 0,
-            'all_returns': [],
-            'daily_counts': [],
-            'stock_frequency': Counter()
-        })
+        strategy_stats = defaultdict(self._create_strategy_stats)
         
         for day_result in self.daily_results:
             for strategy, result in day_result['strategies'].items():
@@ -152,9 +249,9 @@ class StrategyBacktest:
                 stats['total_picks'] += result['count']
                 stats['daily_counts'].append(result['count'])
                 
-                if result['count'] > 0:
+                if result.get("trades"):
                     stats['active_days'] += 1
-                    stats['all_returns'].extend(result['returns'])
+                    stats['all_trades'].extend(result['trades'])
                     
                     # 统计股票出现频率
                     for stock in result['picks']:
@@ -164,26 +261,38 @@ class StrategyBacktest:
         for strategy, stats in strategy_stats.items():
             print(f"\n🎯 【{strategy}】")
             print(f"   选股活跃度: {stats['active_days']}/{stats['total_days']} 天 ({stats['active_days']/stats['total_days']*100:.1f}%)")
-            print(f"   总选股次数: {stats['total_picks']} 只")
+            print(f"   总选股次数: {stats['total_picks']} 次")
             print(f"   平均每日选股: {stats['total_picks']/stats['total_days']:.2f} 只")
             
-            if stats['all_returns']:
-                avg_return = sum(stats['all_returns']) / len(stats['all_returns'])
-                win_rate = sum(1 for r in stats['all_returns'] if r > 0) / len(stats['all_returns'])
-                max_return = max(stats['all_returns'])
-                min_return = min(stats['all_returns'])
-                
-                print(f"   平均次日收益: {avg_return:+.2f}%")
+            all_trades = stats["all_trades"]
+            if all_trades:
+                all_returns = [t["return"] for t in all_trades]
+                avg_return = sum(all_returns) / len(all_returns)
+                win_rate = sum(1 for r in all_returns if r > 0) / len(all_returns)
+                max_return = max(all_returns)
+                min_return = min(all_returns)
+                avg_holding_days = sum(t["holding_days"] for t in all_trades) / len(
+                    all_trades
+                )
+                trade_outcomes = Counter(t["status"] for t in all_trades)
+
+                print(f"   成功交易次数: {len(all_trades)} 次")
+                print(f"   平均持股天数: {avg_holding_days:.1f} 天")
+                print(f"   平均单笔收益: {avg_return:+.2f}%")
                 print(f"   胜率: {win_rate*100:.1f}%")
                 print(f"   最大收益: {max_return:+.2f}%")
                 print(f"   最大亏损: {min_return:+.2f}%")
-                
+                outcomes_str = ", ".join(
+                    [f"{k}: {v}" for k, v in trade_outcomes.items()]
+                )
+                print(f"   交易结果分布: {outcomes_str}")
+
                 # 热门股票
                 top_stocks = stats['stock_frequency'].most_common(5)
                 if top_stocks:
                     print(f"   热门股票: {', '.join([f'{stock}({count}次)' for stock, count in top_stocks])}")
             else:
-                print(f"   ❌ 期间内无选股记录")
+                print(f"   ❌ 期间内无成功交易记录")
     
     def generate_optimization_suggestions(self) -> None:
         """生成优化建议"""

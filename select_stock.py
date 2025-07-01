@@ -86,14 +86,14 @@ def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data:
     # 入场价：当前收盘价附近，略低于收盘价以获得更好入场点
     entry_price = min(current_close * 0.99, (current_close + current_low) / 2)
     
-    # 离场价：基于阻力位或5-8%收益目标
-    resistance_target = min(resistance_level, current_close * 1.08)
-    exit_price = max(current_close * 1.05, resistance_target)
+    # 离场价：基于阻力位或10-12%收益目标
+    resistance_target = min(resistance_level, current_close * 1.12)
+    exit_price = max(current_close * 1.10, resistance_target)
     
     # 止损价：基于支撑位或ATR，取较高者以降低风险
     atr_stop = current_close - (atr * 1.5)
     support_stop = support_level * 0.98
-    stop_loss = max(atr_stop, support_stop, current_close * 0.92)  # 最多8%止损
+    stop_loss = max(atr_stop, support_stop, current_close * 0.95)  # 最多5%止损
     
     return {
         "entry_price": round(entry_price, 2),
@@ -165,7 +165,7 @@ def load_config(cfg_path: Path) -> List[Dict[str, Any]]:
 
 def instantiate_selector(cfg: Dict[str, Any]):
     """动态加载 Selector 类并实例化"""
-    cls_name: str = cfg.get("class")
+    cls_name: str | None = cfg.get("class")
     if not cls_name:
         raise ValueError("缺少 class 字段")
 

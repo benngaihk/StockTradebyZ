@@ -5,18 +5,18 @@
       "alias": "少妇战法",
       "activate": true,
       "params": {
-        "j_threshold": 1,
-        "bbi_min_window": 20,
+        "j_threshold": -5,
+        "bbi_min_window": 30,
         "max_window": 60,
-        "price_range_pct": 0.5,
-        "bbi_q_threshold": 0.1,
+        "price_range_pct": 0.3,
+        "bbi_q_threshold": 0.05,
         "j_q_threshold": 0.10
       }
     },
     {
       "class": "BBIShortLongSelector",
       "alias": "补票战法",
-      "activate": true,
+      "activate": false,
       "params": {
         "n_short": 3,
         "n_long": 21,
@@ -29,7 +29,7 @@
     {
       "class": "BreakoutVolumeKDJSelector",
       "alias": "TePu战法",
-      "activate": true,
+      "activate": false,
       "params": {
         "j_threshold": 1,
         "j_q_threshold": 0.10,
