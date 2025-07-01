@@ -6,7 +6,7 @@
       "activate": true,
       "params": {
         "j_threshold": 1,
-        "bbi_min_window": 20,
+        "bbi_min_window": 25,
         "max_window": 60,
         "price_range_pct": 0.5,
         "bbi_q_threshold": 0.05,
