@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 每日股票选股自动化脚本
+# 每日股票选股自动化脚本（含价格建议）
 # 使用方法：bash daily_select.sh
 
 echo "🚀 开始每日选股流程..."
@@ -23,13 +23,13 @@ python fetch_kline.py \
   --workers 10
 
 echo ""
-echo "🎯 第二步：运行原版选股策略..."
+echo "🎯 第二步：运行原版选股策略（含价格建议）..."
 python select_stock.py \
   --data-dir ./data \
   --config ./configs.json
 
 echo ""
-echo "🚀 第三步：运行优化版选股策略..."
+echo "🚀 第三步：运行优化版选股策略（含价格建议）..."
 python select_stock.py \
   --data-dir ./data \
   --config ./configs_optimized.json
@@ -42,5 +42,7 @@ echo ""
 echo "✅ 选股完成！"
 echo "📋 总结："
 echo "   - 查看 select_results.log 了解详细日志"
+echo "   - 每只股票都包含：入场价、离场价、止损价、收益风险比"
 echo "   - 关注新选中的股票，避免追高已涨股票"
-echo "   - 建议结合多个策略分散风险" 
+echo "   - 建议严格按照止损价执行风险控制"
+echo "   - 单只股票仓位不超过总资金的10%" 
