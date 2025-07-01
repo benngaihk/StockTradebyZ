@@ -64,7 +64,7 @@ def bbi_deriv_uptrend(
     q_threshold: float = 0.0,
 ) -> bool:
     """
-    判断 BBI 是否“整体上升”。
+    判断 BBI 是否"整体上升"。
 
     令最新交易日为 T，在区间 [T-w+1, T]（w 自适应，w ≥ min_window 且 ≤ max_window）
     内，先将 BBI 归一化：BBI_norm(t) = BBI(t) / BBI(T-w+1)。
@@ -72,7 +72,7 @@ def bbi_deriv_uptrend(
     再计算一阶差分 Δ(t) = BBI_norm(t) - BBI_norm(t-1)。  
     若 Δ(t) 的前 q_threshold 分位数 ≥ 0，则认为该窗口通过；只要存在
     **最长** 满足条件的窗口即可返回 True。q_threshold=0 时退化为
-    “全程单调不降”（旧版行为）。
+    "全程单调不降"（旧版行为）。
 
     Parameters
     ----------
@@ -159,7 +159,7 @@ class BBIKDJSelector:
             return False
         j_quantile = float(j_window.quantile(self.j_q_threshold))
 
-        if not (j_today < self.j_threshold or j_today <= j_quantile):
+        if not (j_today < self.j_threshold and j_today <= j_quantile):
             return False
 
         # 3. MACD：DIF > 0
@@ -312,8 +312,7 @@ class BreakoutVolumeKDJSelector:
             return False
         j_quantile = float(j_window.quantile(self.j_q_threshold))
 
-        # 若不满足任一 J 条件，则淘汰
-        if not (j_today < self.j_threshold or j_today <= j_quantile):
+        if not (j_today < self.j_threshold and j_today <= j_quantile):
             return False
         if hist["DIF"].iloc[-1] <= 0:
             return False
