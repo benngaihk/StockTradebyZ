@@ -206,7 +206,7 @@ def _get_kline_akshare(code: str, start: str, end: str, adjust: str) -> pd.DataF
     df[[c for c in df.columns if c != "date"]] = df[[c for c in df.columns if c != "date"]].apply(
         pd.to_numeric, errors="coerce"
     )
-    df = df[["date", "open", "close", "high", "low", "volume"]]
+    df = df[["date", "open", "close", "high", "low", "volume", "amount"]]
     return df.sort_values("date").reset_index(drop=True)
 
 # ---------- Mootdx 工具函数 ---------- #
@@ -222,16 +222,25 @@ def _get_kline_mootdx(code: str, start: str, end: str, adjust: str, freq_code: i
         return pd.DataFrame()
     if df is None or df.empty:
         return pd.DataFrame()
+    
+    # 鲁棒地处理列名，防止 'volume.1' 问题
+    if 'vol' in df.columns:
+        df = df.rename(columns={'vol': 'volume'})
+    if 'volume.1' in df.columns:
+        df = df.rename(columns={'volume.1': 'amount'})
 
     df = df.rename(
-        columns={"datetime": "date", "open": "open", "high": "high", "low": "low", "close": "close", "vol": "volume"}
+        columns={"datetime": "date", "open": "open", "high": "high", "low": "low", "close": "close"}
     )
     df["date"] = pd.to_datetime(df["date"]).dt.normalize()
     start_ts = pd.to_datetime(start, format="%Y%m%d")
     end_ts = pd.to_datetime(end, format="%Y%m%d")
     df = df[(df["date"].dt.date >= start_ts.date()) & (df["date"].dt.date <= end_ts.date())].copy()
     df = df.sort_values("date").reset_index(drop=True)
-    return df[["date", "open", "close", "high", "low", "volume"]]
+    
+    # 确保最终列名正确
+    required_cols = ["date", "open", "close", "high", "low", "volume", "amount"]
+    return df[required_cols]
 
 # --------------------------- 数据校验 & 公共工具 --------------------------- #
 
@@ -304,8 +313,8 @@ def fetch_batch_tushare(
         sub = df_all[df_all["ts_code"] == ts_code].copy()
         if sub.empty:
             continue
-        sub = sub.rename(columns={"open": "open", "close": "close", "high": "high", "low": "low", "volume": "volume"})[
-            ["date", "open", "close", "high", "low", "volume"]
+        sub = sub.rename(columns={"open": "open", "close": "close", "high": "high", "low": "low", "volume": "volume", "amount": "amount"})[
+            ["date", "open", "close", "high", "low", "volume", "amount"]
         ]
         sub = validate(sub)
         _persist_code_dataframe(code, sub, out_dir, incremental)

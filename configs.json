@@ -1,9 +1,20 @@
 {
   "selectors": [
     {
+      "class": "CombinedStrategySelector",
+      "alias": "综合评分策略",
+      "activate": true,
+      "params": {
+        "score_threshold": 1,
+        "bbikdj": {},
+        "macd": {},
+        "rsi": {}
+      }
+    },
+    {
       "class": "BBIKDJSelector",
       "alias": "少妇战法",
-      "activate": true,
+      "activate": false,
       "params": {
         "j_threshold": 1,
         "bbi_min_window": 25,
@@ -11,6 +22,21 @@
         "price_range_pct": 0.5,
         "bbi_q_threshold": 0.05,
         "j_q_threshold": 0.10
+      }
+    },
+    {
+      "class": "MACDGoldenCrossSelector",
+      "alias": "MACD金叉",
+      "activate": false,
+      "params": {}
+    },
+    {
+      "class": "RSIOversoldSelector",
+      "alias": "RSI超卖反弹",
+      "activate": false,
+      "params": {
+        "n": 14,
+        "threshold": 30
       }
     },
     {

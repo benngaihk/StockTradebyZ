@@ -37,17 +37,21 @@ class StrategyBacktest:
         return load_data(self.data_dir, codes)
     
     def _get_trading_dates(self, end_date: datetime, days: int) -> List[datetime]:
-        """获取过去N个交易日的日期列表"""
-        dates = []
-        current = end_date
+        """获取过去N个交易日的日期列表, 基于真实数据"""
+        # 从任意一个股票数据中提取所有日期作为交易日历
+        all_dates_series = pd.to_datetime(pd.concat(
+            [df['date'] for df in self.data.values()]
+        ).unique())
+        all_dates = pd.DatetimeIndex(all_dates_series).sort_values()
         
-        while len(dates) < days:
-            # 检查是否有数据（简单判断：是否为工作日）
-            if current.weekday() < 5:  # 周一到周五
-                dates.append(current)
-            current -= timedelta(days=1)
+        # 筛选出在结束日期之前的日期
+        trading_calendar = all_dates[all_dates <= end_date]
+        
+        if len(trading_calendar) < days:
+            print(f"⚠️ 警告: 请求回测 {days} 天, 但可用交易日只有 {len(trading_calendar)} 天。")
+            return trading_calendar.tolist()
             
-        return list(reversed(dates))
+        return trading_calendar[-days:].tolist()
     
     def _simulate_trade(
         self, stock_code: str, select_date: datetime, max_holding_days: int = 10
@@ -236,7 +240,7 @@ class StrategyBacktest:
     def analyze_results(self) -> None:
         """分析回测结果"""
         print("\n" + "="*80)
-        print("📈 策略回测结果分析")
+        print(f"📈 策略回测结果分析 - {len(self.daily_results)} 天")
         print("="*80)
         
         # 统计各策略表现
@@ -293,6 +297,7 @@ class StrategyBacktest:
                     print(f"   热门股票: {', '.join([f'{stock}({count}次)' for stock, count in top_stocks])}")
             else:
                 print(f"   ❌ 期间内无成功交易记录")
+        print("=" * 80)
     
     def generate_optimization_suggestions(self) -> None:
         """生成优化建议"""
@@ -348,26 +353,25 @@ class StrategyBacktest:
         print(f"   4. 建议结合多个策略组合使用，分散风险")
 
 def main():
-    parser = argparse.ArgumentParser(description="100日选股策略回测")
-    parser.add_argument("--data-dir", default="./data", help="CSV数据目录")
-    parser.add_argument("--config", default="./configs.json", help="选股配置文件")
-    parser.add_argument("--days", type=int, default=100, help="回测天数")
-    
+    parser = argparse.ArgumentParser(description="选股策略回测分析")
+    parser.add_argument(
+        "--data-dir", type=Path, default=Path("./data"), help="股票数据目录"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("./configs.json"),
+        help="策略配置文件",
+    )
+    parser.add_argument(
+        "--days", type=int, default=100, help="回测最近N个交易日"
+    )
     args = parser.parse_args()
-    
-    # 创建回测对象
-    backtest = StrategyBacktest(Path(args.data_dir), Path(args.config))
-    
-    # 运行回测
-    backtest.run_backtest(args.days)
-    
-    # 分析结果
-    backtest.analyze_results()
-    
-    # 生成优化建议
-    backtest.generate_optimization_suggestions()
-    
-    print(f"\n🎯 回测完成！建议根据以上分析结果调整策略参数。")
+
+    backtester = StrategyBacktest(data_dir=args.data_dir, config_path=args.config)
+    backtester.run_backtest(days=args.days)
+    backtester.analyze_results()
+    backtester.generate_optimization_suggestions()
 
 if __name__ == "__main__":
     main() 

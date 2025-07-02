@@ -137,6 +137,15 @@ def load_data(data_dir: Path, codes: Iterable[str]) -> Dict[str, pd.DataFrame]:
             logger.warning("%s 不存在，跳过", fp.name)
             continue
         df = pd.read_csv(fp, parse_dates=["date"]).sort_values("date")
+        
+        # 修复 'volume.1' -> 'amount' 的问题
+        if 'volume.1' in df.columns:
+            df = df.rename(columns={'volume.1': 'amount'})
+            
+        # 防御性检查：确保 amount 列存在
+        if 'amount' not in df.columns:
+            df['amount'] = 0
+
         frames[code] = df
     return frames
 
