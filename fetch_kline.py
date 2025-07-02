@@ -134,7 +134,7 @@ def _to_ts_code(code: str) -> str:
 
 def _fetch_batch_tushare(
     codes: List[str],
-    per_code_start: Dict[str, str],
+    per_code_start: Dict[str, Optional[str]],
     end: str,
 ) -> pd.DataFrame:
     """Pull daily bars for *multiple* stocks via pro.daily.
@@ -142,7 +142,7 @@ def _fetch_batch_tushare(
     Parameters
     ----------
     codes            list of 6‑digit tickers (without exchange suffix)
-    per_code_start   mapping code -> YYYYMMDD start date
+    per_code_start   mapping code -> YYYYMMDD start date, or None if up-to-date
     end              YYYYMMDD end date (common to all)
 
     Returns
@@ -151,7 +151,10 @@ def _fetch_batch_tushare(
     """
     ts_codes = [_to_ts_code(code) for code in codes]
     # Use the earliest required start among the batch – cheaper single query
-    start = min(per_code_start.values())
+    valid_starts = [v for v in per_code_start.values() if v is not None]
+    if not valid_starts:
+        return pd.DataFrame()
+    start = min(valid_starts)
 
     for attempt in range(1, 4):
         try:
@@ -271,7 +274,7 @@ def fetch_batch_tushare(
 ):
     """Fetch a *batch* of stocks via Tushare and persist each to its own CSV."""
     # For incremental mode we need per‑code start dates.
-    per_code_start = {code: start for code in codes}
+    per_code_start: Dict[str, Optional[str]] = {code: start for code in codes}
     if incremental:
         for code in codes:
             csv_path = out_dir / f"{code}.csv"
@@ -355,20 +358,20 @@ def fetch_one(
 
 def main():
     parser = argparse.ArgumentParser(description="按市值筛选 A 股并抓取历史 K 线 – 支持批量模式 (Tushare)")
-    parser.add_argument("--datasource", choices=["tushare", "akshare", "mootdx"], default="tushare", help="历史 K 线数据源")
+    parser.add_argument("--datasource", choices=["tushare", "akshare", "mootdx"], default="mootdx", help="历史 K 线数据源")
     parser.add_argument("--frequency", type=int, choices=list(_FREQ_MAP.keys()), default=4, help="K线频率编码，参见说明 (仅 mootdx 有效)")
-    parser.add_argument("--exclude-gem", default=True, help="True则排除创业板/科创板/北交所")
+    parser.add_argument("--exclude-gem", default=True, action=argparse.BooleanOptionalAction, help="是否排除创业板/科创板/北交所 (默认排除, 使用 --no-exclude-gem 则包含)")
     parser.add_argument("--min-mktcap", type=float, default=5e9, help="最小总市值（含），单位：元")
     parser.add_argument("--max-mktcap", type=float, default=float("+inf"), help="最大总市值（含），单位：元，默认无限制")
-    parser.add_argument("--start", default="20190101", help="起始日期 YYYYMMDD 或 'today'")
+    parser.add_argument("--start", default="20200101", help="起始日期 YYYYMMDD 或 'today'")
     parser.add_argument("--end", default="today", help="结束日期 YYYYMMDD 或 'today'")
     parser.add_argument("--out", default="./data", help="输出目录")
-    parser.add_argument("--workers", type=int, default=3, help="并发线程数")    
+    parser.add_argument("--workers", type=int, default=10, help="并发线程数")
     args = parser.parse_args()
 
     # ---------- Token 处理 ---------- #
     if args.datasource == "tushare":
-        ts_token = " "  # 填入你的token
+        ts_token = "***"  # ← 替换为你的 Token
         ts.set_token(ts_token)
         global pro
         pro = ts.pro_api()

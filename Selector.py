@@ -159,7 +159,7 @@ class BBIKDJSelector:
             return False
         j_quantile = float(j_window.quantile(self.j_q_threshold))
 
-        if not (j_today < self.j_threshold and j_today <= j_quantile):
+        if not (j_today < self.j_threshold or j_today <= j_quantile):
             return False
 
         # 3. MACD：DIF > 0
@@ -312,7 +312,7 @@ class BreakoutVolumeKDJSelector:
             return False
         j_quantile = float(j_window.quantile(self.j_q_threshold))
 
-        if not (j_today < self.j_threshold and j_today <= j_quantile):
+        if not (j_today < self.j_threshold or j_today <= j_quantile):
             return False
         if hist["DIF"].iloc[-1] <= 0:
             return False
