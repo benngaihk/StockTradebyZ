@@ -25,99 +25,27 @@ logger = logging.getLogger("select")
 
 
 # ---------- 价格建议计算 ----------
+# 此函数已移动到 Selector.py
 
-def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> Dict[str, float]:
-    """
-    计算股票的入场价、离场价、止损价建议
-    
-    Args:
-        stock_code: 股票代码
-        trade_date: 交易日期
-        data: 股票数据字典
-    
-    Returns:
-        包含entry_price, exit_price, stop_loss的字典
-    """
-    if stock_code not in data:
-        return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0}
-    
-    df = data[stock_code].copy()
-    df_sorted = df.sort_values('date')
-    
-    # 找到交易日期对应的数据，如果没有则找最接近的数据
-    trade_date_mask = df_sorted['date'].dt.date == trade_date.date()
-    if trade_date_mask.any():
-        current_idx = df_sorted[trade_date_mask].index[0]
-    else:
-        # 找到最接近且不晚于指定日期的交易日
-        before_dates = df_sorted[df_sorted['date'] <= trade_date]
-        if before_dates.empty:
-            return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0}
-        current_idx = before_dates.index[-1]  # 最近的交易日
-    
-    current_data = df_sorted.loc[current_idx]
-    current_close = current_data['close']
-    current_low = current_data['low']
-    current_high = current_data['high']
-    
-    # 获取最近20天的数据用于计算支撑阻力位
-    end_idx = df_sorted.index.get_loc(current_idx)
-    start_idx = max(0, end_idx - 19)
-    recent_data = df_sorted.iloc[start_idx:end_idx+1]
-    
-    if len(recent_data) < 5:
-        return {"entry_price": current_close, "exit_price": current_close * 1.05, "stop_loss": current_close * 0.95}
-    
-    # 计算支撑位和阻力位
-    support_level = recent_data['low'].min()
-    resistance_level = recent_data['high'].max()
-    
-    # 计算ATR（平均真实波幅）用于止损
-    high_low = recent_data['high'] - recent_data['low']
-    if len(recent_data) > 1:
-        high_close = abs(recent_data['high'] - recent_data['close'].shift(1))
-        low_close = abs(recent_data['low'] - recent_data['close'].shift(1))
-        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-        atr = true_range.mean()
-    else:
-        atr = high_low.iloc[-1]
-    
-    # 计算价格建议
-    # 入场价：当前收盘价附近，略低于收盘价以获得更好入场点
-    entry_price = current_close
-    
-    # 离场价：基于阻力位或10-12%收益目标
-    resistance_target = min(resistance_level, current_close * 1.12)
-    exit_price = max(current_close * 1.10, resistance_target)
-    
-    # 止损价：基于支撑位或ATR，取较高者以降低风险
-    atr_stop = current_close - (atr * 1.5)
-    support_stop = support_level * 0.98
-    stop_loss = max(atr_stop, support_stop, current_close * 0.95)  # 最多5%止损
-    
-    return {
-        "entry_price": round(entry_price, 2),
-        "exit_price": round(exit_price, 2), 
-        "stop_loss": round(stop_loss, 2),
-        "actual_date": current_data['date'].strftime('%Y-%m-%d')
-    }
-
-
-def format_stock_with_prices(stock_code: str, trade_date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> str:
+def format_stock_with_prices(stock_info: Dict[str, Any]) -> str:
     """
     格式化股票信息，包含价格建议
     """
-    prices = calculate_price_suggestions(stock_code, trade_date, data)
+    stock_code = stock_info['code']
+    score = stock_info.get('score')
+    prices = stock_info['prices']
+    risk_reward_ratio = stock_info.get('risk_reward_ratio', 0)
     
-    if prices["entry_price"] == 0:
+    if prices.get("entry_price", 0) == 0:
         return f"{stock_code} (无价格数据)"
     
     # 计算预期收益和风险比
     potential_return = (prices["exit_price"] - prices["entry_price"]) / prices["entry_price"] * 100
     potential_loss = (prices["entry_price"] - prices["stop_loss"]) / prices["entry_price"] * 100
-    risk_reward_ratio = potential_return / potential_loss if potential_loss > 0 else 0
     
-    return (f"{stock_code} | "
+    score_str = f"| 得分: {score:.2f} " if score is not None else ""
+
+    return (f"{stock_code} {score_str}| "
             f"基于日期: {prices['actual_date']} | "
             f"入场: ¥{prices['entry_price']} | "
             f"离场: ¥{prices['exit_price']} | " 
@@ -193,12 +121,34 @@ def instantiate_selector(cfg: Dict[str, Any]):
 # ---------- 主函数 ----------
 
 def main():
-    p = argparse.ArgumentParser(description="Run selectors defined in configs.json")
-    p.add_argument("--data-dir", default="./data", help="CSV 行情目录")
-    p.add_argument("--config", default="./configs.json", help="Selector 配置文件")
-    p.add_argument("--date", help="交易日 YYYY-MM-DD；缺省=数据最新日期")
-    p.add_argument("--tickers", default="all", help="'all' 或逗号分隔股票代码列表")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(description="Run selectors defined in configs.json")
+    parser.add_argument("--data-dir", default="./data", help="CSV 行情目录")
+    parser.add_argument(
+        "--config", type=Path, default=Path("./configs.json"), help="策略配置文件"
+    )
+    parser.add_argument("--date", type=str, required=False, help="选股日期，格式 YYYY-MM-DD")
+    parser.add_argument("--tickers", default="all", help="'all' 或逗号分隔股票代码列表")
+    parser.add_argument("--log-file", type=str, default=None, help="指定日志输出文件路径")
+
+    args = parser.parse_args()
+    
+    # --- 日志配置 ---
+    # 移除所有现有的处理器
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # 根据是否存在 --log-file 参数来决定输出目标
+    if args.log_file:
+        # 输出到文件
+        handler = logging.FileHandler(args.log_file, mode='a', encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(message)s')) # 回测时只记录核心信息
+    else:
+        # 输出到控制台
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    
+    logger.addHandler(handler)
+    logger.propagate = False
 
     # --- 加载行情 ---
     data_dir = Path(args.data_dir)
@@ -217,23 +167,36 @@ def main():
 
     data = load_data(data_dir, codes)
     if not data:
-        logger.error("未能加载任何行情数据")
+        logger.error("数据目录 %s 为空，请先运行 fetch_kline.py", data_dir)
         sys.exit(1)
 
-    trade_date = (
-        pd.to_datetime(args.date)
-        if args.date
-        else max(df["date"].max() for df in data.values())
-    )
-    if not args.date:
-        logger.info("未指定 --date，使用最近日期 %s", trade_date.date())
+    # --- 确定交易日 ---
+    if args.date:
+        try:
+            trade_date = pd.to_datetime(args.date)
+        except ValueError:
+            logger.error("日期格式不正确，请使用 YYYY-MM-DD 格式")
+            sys.exit(1)
+    else:
+        trade_date = max(df["date"].max() for df in data.values())
+        if not args.log_file: # 只有在非回测模式下才打印
+            logger.info("未指定 --date，使用最近日期 %s", trade_date.date())
 
-    # --- 加载 Selector 配置 ---
-    selector_cfgs = load_config(Path(args.config))
+    # --- 加载策略配置 ---
+    try:
+        with open(args.config, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+        # 确保我们获取的是 'selectors' 键下的列表
+        selector_cfgs = config_data.get("selectors", [])
+        if not selector_cfgs:
+            raise ValueError("配置文件中未找到 'selectors' 列表或列表为空")
+    except (FileNotFoundError, json.JSONDecodeError, ValueError) as e:
+        logger.error("加载或解析配置文件 %s 时出错: %s", args.config, e)
+        sys.exit(1)
 
     # --- 逐个 Selector 运行 ---
     for cfg in selector_cfgs:
-        if cfg.get("activate", True) is False:
+        if not isinstance(cfg, dict) or cfg.get("activate", True) is False:
             continue
         try:
             alias, selector = instantiate_selector(cfg)
@@ -251,9 +214,10 @@ def main():
         
         if picks:
             logger.info("📋 详细交易建议:")
-            for stock in picks:
-                stock_info = format_stock_with_prices(stock, trade_date, data)
-                logger.info("   %s", stock_info)
+            for pick in picks:
+                # Selector 已返回所有需要的信息
+                log_line = format_stock_with_prices(pick)
+                logger.info("   %s", log_line)
             
         else:
             logger.info("无符合条件股票")

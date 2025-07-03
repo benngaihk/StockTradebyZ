@@ -5,10 +5,26 @@
       "alias": "综合评分策略",
       "activate": true,
       "params": {
-        "score_threshold": 2,
+        "score_threshold": 1.6,
+        "price_params": {
+          "profit_target_min_pct": 0.10,
+          "profit_target_max_pct": null
+        },
+        "weights": {
+          "bbikdj": 1.0,
+          "macd": 0.6,
+          "rsi": 0.4,
+          "breakout": 0.0,
+          "bollinger": 0.5,
+          "goldencross": 1.0,
+          "obv": 0.5
+        },
         "bbikdj": {},
         "macd": {},
-        "rsi": {}
+        "rsi": {},
+        "bollinger": {},
+        "goldencross": {},
+        "obv": {}
       }
     },
     {
@@ -37,6 +53,24 @@
       "params": {
         "n": 14,
         "threshold": 30
+      }
+    },
+    {
+      "class": "GoldenCrossSelector",
+      "alias": "均线黄金交叉",
+      "activate": false,
+      "params": {
+        "short_window": 10,
+        "long_window": 30
+      }
+    },
+    {
+      "class": "BollingerBandsSelector",
+      "alias": "布林带下轨",
+      "activate": false,
+      "params": {
+        "window": 20,
+        "std_dev": 2
       }
     },
     {

@@ -4,6 +4,96 @@ import numpy as np
 import pandas as pd
 
 
+# ---------- 价格建议计算 (从 select_stock.py 移动至此) ----------
+
+def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data: Dict[str, pd.DataFrame], price_params: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    计算股票的入场价、离场价、止损价建议
+    """
+    # 从参数中获取收益目标，并提供默认值
+    profit_target_min_pct = price_params.get("profit_target_min_pct", 0.10)
+    profit_target_max_pct = price_params.get("profit_target_max_pct") # 默认为 None
+
+    if stock_code not in data:
+        return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0, "actual_date": trade_date.strftime('%Y-%m-%d')}
+    
+    df = data[stock_code].copy()
+    df_sorted = df.sort_values('date')
+    
+    # 找到交易日期 T 对应的数据
+    trade_date_mask = df_sorted['date'].dt.date == trade_date.date()
+    if not trade_date_mask.any():
+        # 如果当天停牌或无数据，则无法进行判断
+        return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0, "actual_date": trade_date.strftime('%Y-%m-%d')}
+        
+    current_idx_loc = df_sorted.index.get_loc(df_sorted[trade_date_mask].index[0])
+
+    # 找到 T+1 日的数据
+    next_day_idx_loc = current_idx_loc + 1
+    if next_day_idx_loc >= len(df_sorted):
+        # 没有下一个交易日的数据，无法生成T+1建议
+        return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0, "actual_date": "N/A"}
+
+    # --- 获取T日和T+1日的数据 ---
+    current_data = df_sorted.iloc[current_idx_loc]
+    next_day_data = df_sorted.iloc[next_day_idx_loc]
+    
+    # 使用 T+1 的开盘价作为入场价
+    entry_price = next_day_data['open']
+    
+    # 获取T日（含）之前的数据用于计算技术指标
+    hist_data_t = df_sorted.iloc[:current_idx_loc + 1]
+    
+    # 获取最近20天的数据用于计算支撑阻力位
+    end_idx = len(hist_data_t) - 1
+    start_idx = max(0, end_idx - 19)
+    recent_data = hist_data_t.iloc[start_idx:end_idx+1]
+    
+    if len(recent_data) < 5:
+        # 数据不足，使用基于T+1开盘价的简单规则
+        return {
+            "entry_price": round(entry_price, 2), 
+            "exit_price": round(entry_price * 1.05, 2), 
+            "stop_loss": round(entry_price * 0.95, 2), 
+            "actual_date": next_day_data['date'].strftime('%Y-%m-%d')
+        }
+    
+    # 计算支撑位和阻力位 (基于T日及之前的数据)
+    support_level = recent_data['low'].min()
+    resistance_level = recent_data['high'].max()
+    
+    # 计算ATR（平均真实波幅）用于止损 (基于T日及之前的数据)
+    high_low = recent_data['high'] - recent_data['low']
+    if len(recent_data) > 1:
+        high_close = abs(recent_data['high'] - recent_data['close'].shift(1))
+        low_close = abs(recent_data['low'] - recent_data['close'].shift(1))
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = true_range.mean()
+    else:
+        atr = high_low.iloc[-1]
+    
+    # --- 基于 T+1 开盘价计算价格建议 ---
+    
+    # 根据 profit_target_max_pct 决定阻力目标
+    if profit_target_max_pct is not None and profit_target_max_pct > 0:
+        resistance_target = min(resistance_level, entry_price * (1 + profit_target_max_pct))
+    else:
+        # 无上限模式
+        resistance_target = resistance_level
+
+    exit_price = max(entry_price * (1 + profit_target_min_pct), resistance_target)
+
+    atr_stop = entry_price - (atr * 1.5)
+    support_stop = support_level * 0.98 # 支撑位仍然是基于历史价格的绝对值
+    stop_loss = max(atr_stop, support_stop, entry_price * 0.95)
+    
+    return {
+        "entry_price": round(entry_price, 2),
+        "exit_price": round(exit_price, 2), 
+        "stop_loss": round(stop_loss, 2),
+        "actual_date": next_day_data['date'].strftime('%Y-%m-%d')
+    }
+
 # --------------------------- 通用指标 --------------------------- #
 
 def compute_kdj(df: pd.DataFrame, n: int = 9) -> pd.DataFrame:
@@ -75,6 +165,25 @@ def compute_dif(df: pd.DataFrame, fast: int = 12, slow: int = 26) -> pd.Series:
     ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
     ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
     return ema_fast - ema_slow
+
+
+def compute_bollinger_bands(df: pd.DataFrame, window: int = 20, std_dev: int = 2) -> pd.DataFrame:
+    """计算布林带指标"""
+    if df.empty:
+        return df.assign(BB_MIDDLE=np.nan, BB_UPPER=np.nan, BB_LOWER=np.nan)
+
+    middle_band = df["close"].rolling(window=window).mean()
+    std = df["close"].rolling(window=window).std()
+    upper_band = middle_band + (std * std_dev)
+    lower_band = middle_band - (std * std_dev)
+
+    return df.assign(BB_MIDDLE=middle_band, BB_UPPER=upper_band, BB_LOWER=lower_band)
+
+
+def compute_obv(df: pd.DataFrame) -> pd.Series:
+    """计算OBV能量潮指标"""
+    obv = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
+    return obv
 
 
 def bbi_deriv_uptrend(
@@ -436,45 +545,216 @@ class BreakoutVolumeKDJSelector:
         return picks
 
 
-class CombinedStrategySelector:
+class BollingerBandsSelector:
     """
-    综合评分策略
-    - BBIKDJSelector: +1分
-    - MACDGoldenCrossSelector: +1分
-    - RSIOversoldSelector: +1分
-    - 总分 >= score_threshold
+    布林带下轨策略
+    - 条件: 收盘价触及或跌破布林带下轨
+    - 过滤: 日均成交额 > 1亿
     """
-    def __init__(self, score_threshold: int = 2, **kwargs):
-        self.score_threshold = score_threshold
-        self.s1 = BBIKDJSelector(**kwargs.get('bbikdj', {}))
-        self.s2 = MACDGoldenCrossSelector(**kwargs.get('macd', {}))
-        self.s3 = RSIOversoldSelector(**kwargs.get('rsi', {}))
-        self.s4 = BreakoutVolumeKDJSelector(**kwargs.get('breakout', {}))
+    def __init__(self, window: int = 20, std_dev: int = 2, min_avg_amount: float = 1e8):
+        self.window = window
+        self.std_dev = std_dev
+        self.min_avg_amount = min_avg_amount
 
-    def select(self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> List[str]:
-        picks = []
-        # --- 调试日期 ---
-        debug_dates_str = ["2025-07-01", "2025-07-02"]
+    def _passes_filters(self, hist: pd.DataFrame) -> bool:
+        required_len = max(self.window, 20)
+        if len(hist) < required_len:
+            return False
 
+        hist = hist.copy()
+        hist['Amount20'] = hist['amount'].rolling(window=20).mean()
+        if hist.iloc[-1]['Amount20'] < self.min_avg_amount:
+            return False
+
+        hist = compute_bollinger_bands(hist, self.window, self.std_dev)
+        today = hist.iloc[-1]
+        
+        if pd.isna(today['BB_LOWER']):
+            return False
+
+        if today['close'] <= today['BB_LOWER']:
+            return True
+        return False
+
+    def select(
+        self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]
+    ) -> List[str]:
+        picks: List[str] = []
         for code, df in data.items():
-            hist = df[df["date"] <= date].copy()
-            if len(hist) < 20:  # 确保有足够数据
-                continue
-
-            s1_pass = self.s1._passes_filters(hist.copy())
-            s2_pass = self.s2._passes_filters(hist.copy())
-            s3_pass = self.s3._passes_filters(hist.copy())
-            s4_pass = self.s4._passes_filters(hist.copy())
-            
-            score = int(s1_pass) + int(s2_pass) + int(s3_pass) + int(s4_pass)
-            
-            # --- 精准调试打印 (使用字符串比较) ---
-            if date.strftime('%Y-%m-%d') in debug_dates_str:
-                # 重点关注被选出的股票, 或任意几只用于对比
-                if score >= self.score_threshold or code in ['002955', '600129', '002605']: 
-                     print(f"[DEBUG {date.date()}] Stock: {code} | Score: {score} | "
-                           f"S1(BBIKDJ):{s1_pass}, S2(MACD):{s2_pass}, S3(RSI):{s3_pass}, S4(Breakout):{s4_pass}")
-
-            if score >= self.score_threshold:
+            hist = df[df["date"] <= date]
+            if self._passes_filters(hist):
                 picks.append(code)
         return picks
+
+
+class GoldenCrossSelector:
+    """
+    均线黄金交叉策略
+    - 条件: 短期均线从下向上穿过长期均线
+    - 过滤: 日均成交额 > 1亿
+    """
+    def __init__(self, short_window: int = 10, long_window: int = 30, min_avg_amount: float = 1e8):
+        self.short_window = short_window
+        self.long_window = long_window
+        self.min_avg_amount = min_avg_amount
+
+    def _passes_filters(self, hist: pd.DataFrame) -> bool:
+        required_len = max(self.long_window + 1, 20)
+        if len(hist) < required_len:
+            return False
+
+        hist = hist.copy()
+        hist['Amount20'] = hist['amount'].rolling(window=20).mean()
+        if hist.iloc[-1]['Amount20'] < self.min_avg_amount:
+            return False
+
+        hist['MA_short'] = hist['close'].rolling(window=self.short_window).mean()
+        hist['MA_long'] = hist['close'].rolling(window=self.long_window).mean()
+
+        today = hist.iloc[-1]
+        yesterday = hist.iloc[-2]
+
+        if pd.isna(today['MA_short']) or pd.isna(today['MA_long']):
+            return False
+
+        if yesterday['MA_short'] < yesterday['MA_long'] and today['MA_short'] >= today['MA_long']:
+            return True
+        return False
+
+    def select(
+        self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]
+    ) -> List[str]:
+        picks: List[str] = []
+        for code, df in data.items():
+            hist = df[df["date"] <= date]
+            if self._passes_filters(hist):
+                picks.append(code)
+        return picks
+
+
+class OBVSelector:
+    """
+    OBV 能量潮策略 (价涨量增)
+    - 条件: 股价和OBV都处于短期均线之上
+    - 过滤: 日均成交额 > 1亿
+    """
+    def __init__(self, ma_window: int = 20, min_avg_amount: float = 1e8):
+        self.ma_window = ma_window
+        self.min_avg_amount = min_avg_amount
+
+    def _passes_filters(self, hist: pd.DataFrame) -> bool:
+        required_len = max(self.ma_window, 20)
+        if len(hist) < required_len:
+            return False
+
+        hist = hist.copy()
+        hist['Amount20'] = hist['amount'].rolling(window=20).mean()
+        if hist.iloc[-1]['Amount20'] < self.min_avg_amount:
+            return False
+
+        hist['OBV'] = compute_obv(hist)
+        hist['Close_MA'] = hist['close'].rolling(window=self.ma_window).mean()
+        hist['OBV_MA'] = hist['OBV'].rolling(window=self.ma_window).mean()
+        
+        today = hist.iloc[-1]
+        
+        if pd.isna(today['Close_MA']) or pd.isna(today['OBV_MA']):
+            return False
+
+        if today['close'] > today['Close_MA'] and today['OBV'] > today['OBV_MA']:
+            return True
+        return False
+
+    def select(
+        self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]
+    ) -> List[str]:
+        picks: List[str] = []
+        for code, df in data.items():
+            hist = df[df["date"] <= date]
+            if self._passes_filters(hist):
+                picks.append(code)
+        return picks
+
+
+class CombinedStrategySelector:
+    """
+    一个组合多个策略并根据加权分数进行选择的元选择器。
+    """
+
+    STRATEGIES = {
+        "bbikdj": BBIKDJSelector,
+        "macd": MACDGoldenCrossSelector,
+        "rsi": RSIOversoldSelector,
+        "breakout": BreakoutVolumeKDJSelector,
+        "bollinger": BollingerBandsSelector,
+        "goldencross": GoldenCrossSelector,
+        "obv": OBVSelector
+    }
+
+    def __init__(self, score_threshold: float = 1.0, weights: Optional[Dict[str, float]] = None, top_n: Optional[int] = None, price_params: Optional[Dict[str, Any]] = None, **kwargs):
+        self.score_threshold = score_threshold
+        self.weights = weights if weights is not None else {}
+        self.top_n = top_n
+        self.price_params = price_params if price_params is not None else {}
+        self.selectors: Dict[str, Any] = {}
+
+        for key, selector_class in self.STRATEGIES.items():
+            if key in kwargs:
+                # 使用 kwargs 中为特定策略提供的参数来实例化
+                self.selectors[key] = selector_class(**kwargs[key])
+
+    def select(self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> List[Dict[str, Any]]:
+        all_scores: Dict[str, float] = {}
+        # 预先计算所有子策略的结果
+        sub_results: Dict[str, List[str]] = {}
+        for name, selector in self.selectors.items():
+            sub_results[name] = selector.select(date, data)
+
+        # 为每只股票计算总分
+        all_stocks = data.keys()
+        for stock_code in all_stocks:
+            score = 0.0
+            strategy_details = []
+            for name, weight in self.weights.items():
+                is_selected = stock_code in sub_results.get(name, [])
+                if is_selected:
+                    score += weight
+                strategy_details.append(f"S{list(self.weights.keys()).index(name)+1}({name.upper()}):{is_selected}")
+
+            if score > 0:
+                all_scores[stock_code] = score
+                # 调试日志 (在回测时暂时禁用，以保持输出清洁)
+                # print(f"[DEBUG {date.date()}] Stock: {stock_code} | Score: {score:.2f} | Threshold: {self.score_threshold} | {', '.join(strategy_details)}")
+
+        # 为所有有得分的股票计算详细信息（包括风险收益比）
+        stocks_with_details = []
+        for stock_code, score in all_scores.items():
+            prices = calculate_price_suggestions(stock_code, date, data, self.price_params)
+            risk_reward_ratio = 0
+            # 确保价格有效再计算
+            if prices.get("entry_price", 0) > 0 and prices.get("entry_price") > prices.get("stop_loss", 0):
+                potential_return = prices["exit_price"] - prices["entry_price"]
+                potential_loss = prices["entry_price"] - prices["stop_loss"]
+                if potential_loss > 0:
+                    risk_reward_ratio = potential_return / potential_loss
+            
+            details = {
+                'code': stock_code, 
+                'score': score, 
+                'risk_reward_ratio': risk_reward_ratio,
+                'prices': prices
+            }
+            stocks_with_details.append(details)
+            
+        # 根据得分（主）和风险收益比（次）对股票进行排序
+        sorted_stocks = sorted(
+            stocks_with_details, 
+            key=lambda item: (item['score'], item.get('risk_reward_ratio', 0)), 
+            reverse=True
+        )
+
+        # 根据 top_n 或 score_threshold 返回最终结果
+        if self.top_n is not None and self.top_n > 0:
+            return sorted_stocks[:self.top_n]
+        else:
+            return [s for s in sorted_stocks if s['score'] >= self.score_threshold]

@@ -13,11 +13,11 @@ from collections import defaultdict, Counter
 
 import pandas as pd
 
+from Selector import calculate_price_suggestions
 from select_stock import (
     load_data,
     load_config,
     instantiate_selector,
-    calculate_price_suggestions,
 )
 
 class StrategyBacktest:
@@ -27,6 +27,13 @@ class StrategyBacktest:
         self.data = self._load_data()
         self.selector_configs = load_config(config_path)
         self.trading_calendar = self._initialize_trading_calendar()
+        
+        # 提取CombinedStrategySelector的price_params，用于回测
+        self.price_params = {}
+        for cfg in self.selector_configs:
+            if cfg.get("class") == "CombinedStrategySelector" and "params" in cfg:
+                self.price_params = cfg["params"].get("price_params", {})
+                break
         
         # 回测结果存储
         self.daily_results = []  # 每日选股结果
@@ -78,45 +85,46 @@ class StrategyBacktest:
         Returns:
             一个包含交易详情的字典，如收益率、持股天数等.
         """
-        # 1. 获取价格建议
+        # 1. 获取价格建议 (T日信号，T+1交易)
+        # 注意：这里的 calculate_price_suggestions 已经包含了T+1逻辑
         price_suggestions = calculate_price_suggestions(
-            stock_code, select_date, self.data
+            stock_code, select_date, self.data, self.price_params
         )
-        if price_suggestions["entry_price"] == 0:
+        if price_suggestions.get("entry_price", 0) == 0 or price_suggestions.get("actual_date") == "N/A":
             return {"status": "no_suggestion", "return": 0.0}
 
-        entry_price = price_suggestions["entry_price"]
-        exit_price = price_suggestions["exit_price"]
-        stop_loss = price_suggestions["stop_loss"]
+        # T+1日的日期
+        trade_date_str = price_suggestions["actual_date"]
+        trade_date = pd.to_datetime(trade_date_str)
+        
+        exit_price_suggested = price_suggestions["exit_price"]
+        stop_loss_suggested = price_suggestions["stop_loss"]
 
-        # 2. 找到选股日之后的数据
+        # 2. 找到T+1日及之后的数据
         df = self.data.get(stock_code)
         if df is None:
             return {"status": "no_data", "return": 0.0}
 
-        trade_days = df[df["date"] > select_date].copy()
-        if trade_days.empty:
-            return {"status": "no_data_after", "return": 0.0}
+        # 找到T+1日在数据中的位置
+        trade_day_mask = df['date'] == trade_date
+        if not trade_day_mask.any():
+            return {"status": "no_trade_day_data", "return": 0.0}
+        
+        trade_day_index = df.index.get_loc(df[trade_day_mask].index[0])
+        
+        # 获取T+1日当天的数据
+        entry_day_data = df.loc[df.index[trade_day_index]]
 
-        # 3. 模拟交易: 寻找入场机会 (最多看未来5天)
-        entry_day_data = None
-        buy_price = 0.0
-        entry_day_index = -1
+        # 3. 模拟T+1日入场
+        # 我们直接使用T+1日的开盘价作为买入价，因为这是我们能采取的最早行动
+        buy_price = entry_day_data['open']
+        
+        # 如果开盘价为0或无效，则无法交易
+        if buy_price <= 0 or pd.isna(buy_price):
+            return {"status": "invalid_buy_price", "return": 0.0}
 
-        for i, (idx, day) in enumerate(trade_days.head(5).iterrows()):
-            # 条件：当日最低价 <= 建议入场价
-            if day["low"] <= entry_price:
-                entry_day_data = day
-                # 模拟买入价：如果开盘就低于建议价，以开盘价成交；否则以建议价成交
-                buy_price = min(day["open"], entry_price)
-                entry_day_index = i
-                break
-
-        if entry_day_data is None:
-            return {"status": "no_entry", "return": 0.0}
-
-        # 找到入场日之后的数据进行监控
-        holding_days_df = trade_days.iloc[entry_day_index + 1 :]
+        # 找到T+1日之后的数据进行监控
+        holding_days_df = df.iloc[trade_day_index + 1 :]
 
         # 4. 寻找出场或止损机会
         holding_period = 0
@@ -124,8 +132,8 @@ class StrategyBacktest:
             holding_period += 1
 
             # 止盈条件：当日最高价 >= 建议离场价
-            if day["high"] >= exit_price:
-                sell_price = exit_price  # 假设以建议离场价卖出
+            if day["high"] >= exit_price_suggested:
+                sell_price = exit_price_suggested
                 return {
                     "status": "exit_profit",
                     "return": (sell_price - buy_price) / buy_price * 100,
@@ -135,8 +143,8 @@ class StrategyBacktest:
                 }
 
             # 止损条件：当日最低价 <= 建议止损价
-            if day["low"] <= stop_loss:
-                sell_price = stop_loss  # 假设以建议止损价卖出
+            if day["low"] <= stop_loss_suggested:
+                sell_price = stop_loss_suggested
                 return {
                     "status": "stop_loss",
                     "return": (sell_price - buy_price) / buy_price * 100,
@@ -182,7 +190,7 @@ class StrategyBacktest:
         
         # 逐日回测
         for i, trade_date in enumerate(trading_dates):
-            print(f"\r📊 回测进度: {i+1}/{days} ({trade_date.date()})", end="", flush=True)
+            print(f"\r📊 回测进度: {i+1}/{len(trading_dates)} ({trade_date.date()})", end="", flush=True)
             
             daily_result = {
                 'date': trade_date,
@@ -200,23 +208,28 @@ class StrategyBacktest:
                     
                     # 模拟交易
                     trades = []
-                    for stock in picks:
+                    # 对于CombinedStrategySelector, picks是字典列表
+                    if alias == "综合评分策略":
+                        stock_codes = [p['code'] for p in picks]
+                    else: # 其他selector返回字符串列表
+                        stock_codes = picks
+
+                    for stock in stock_codes:
                         trade_result = self._simulate_trade(stock, trade_date)
                         if trade_result["status"] not in [
                             "no_suggestion",
-                            "no_entry",
-                            "no_data_after",
-                            "not_closed",
                             "no_data",
                             "invalid_buy_price",
+                            "no_trade_day_data",
+                            "not_closed"
                         ]:
                             trades.append(trade_result)
                     
                     returns = [t["return"] for t in trades]
 
                     daily_result['strategies'][alias] = {
-                        'picks': picks,
-                        'count': len(picks),
+                        'picks': stock_codes,
+                        'count': len(stock_codes),
                         'trades': trades,
                         'returns': returns,
                         'avg_return': sum(returns) / len(returns) if returns else 0.0,
