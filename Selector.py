@@ -27,19 +27,19 @@ def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data:
         return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0, "actual_date": trade_date.strftime('%Y-%m-%d')}
         
     current_idx_loc = df_sorted.index.get_loc(df_sorted[trade_date_mask].index[0])
+    current_data = df_sorted.iloc[current_idx_loc]
 
-    # 找到 T+1 日的数据
+    # --- 尝试获取 T+1 日数据，若无则进行估算 ---
     next_day_idx_loc = current_idx_loc + 1
     if next_day_idx_loc >= len(df_sorted):
-        # 没有下一个交易日的数据，无法生成T+1建议
-        return {"entry_price": 0.0, "exit_price": 0.0, "stop_loss": 0.0, "actual_date": "N/A"}
-
-    # --- 获取T日和T+1日的数据 ---
-    current_data = df_sorted.iloc[current_idx_loc]
-    next_day_data = df_sorted.iloc[next_day_idx_loc]
-    
-    # 使用 T+1 的开盘价作为入场价
-    entry_price = next_day_data['open']
+        # T+1 数据不存在，使用 T 日收盘价作为估算入场价
+        entry_price = current_data['close']
+        actual_date_str = f"{current_data['date'].strftime('%Y-%m-%d')} (估算)"
+    else:
+        # T+1 数据存在，使用 T+1 开盘价作为实际入场价
+        next_day_data = df_sorted.iloc[next_day_idx_loc]
+        entry_price = next_day_data['open']
+        actual_date_str = next_day_data['date'].strftime('%Y-%m-%d')
     
     # 获取T日（含）之前的数据用于计算技术指标
     hist_data_t = df_sorted.iloc[:current_idx_loc + 1]
@@ -55,7 +55,7 @@ def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data:
             "entry_price": round(entry_price, 2), 
             "exit_price": round(entry_price * 1.05, 2), 
             "stop_loss": round(entry_price * 0.95, 2), 
-            "actual_date": next_day_data['date'].strftime('%Y-%m-%d')
+            "actual_date": actual_date_str
         }
     
     # 计算支撑位和阻力位 (基于T日及之前的数据)
@@ -91,7 +91,7 @@ def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data:
         "entry_price": round(entry_price, 2),
         "exit_price": round(exit_price, 2), 
         "stop_loss": round(stop_loss, 2),
-        "actual_date": next_day_data['date'].strftime('%Y-%m-%d')
+        "actual_date": actual_date_str
     }
 
 # --------------------------- 通用指标 --------------------------- #
@@ -676,6 +676,107 @@ class OBVSelector:
         return picks
 
 
+class LongTermValueSelector:
+    """
+    长线价值策略: 结合长期趋势、低波动性和持续动量进行选股。
+    - 趋势: 50日均线持续在200日均线之上
+    - 波动性: ATR占收盘价百分比低于阈值
+    - 动量: RSI > 50, MACD金叉且在0轴之上
+    """
+    def __init__(
+        self,
+        ma_short: int = 50,
+        ma_long: int = 200,
+        trend_stability_window: int = 20,
+        atr_window: int = 20,
+        max_atr_pct: float = 0.05,
+        rsi_window: int = 14,
+        rsi_threshold: float = 50,
+        min_avg_amount: float = 1e8,
+    ):
+        self.ma_short = ma_short
+        self.ma_long = ma_long
+        self.trend_stability_window = trend_stability_window
+        self.atr_window = atr_window
+        self.max_atr_pct = max_atr_pct
+        self.rsi_window = rsi_window
+        self.rsi_threshold = rsi_threshold
+        self.min_avg_amount = min_avg_amount
+
+    def _passes_filters(self, hist: pd.DataFrame) -> bool:
+        """检查单个股票是否符合长线价值策略"""
+        # 需要足够的数据来计算最长的均线
+        if len(hist) < self.ma_long + self.trend_stability_window:
+            return False
+            
+        # 1. 成交额过滤
+        if hist['amount'].rolling(window=60).mean().iloc[-1] < self.min_avg_amount:
+            return False
+
+        # 2. 计算技术指标
+        # MA
+        ma_short = hist["close"].rolling(window=self.ma_short).mean()
+        ma_long = hist["close"].rolling(window=self.ma_long).mean()
+        
+        # ATR
+        high_low = hist['high'] - hist['low']
+        high_close = abs(hist['high'] - hist['close'].shift(1))
+        low_close = abs(hist['low'] - hist['close'].shift(1))
+        true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+        atr = true_range.rolling(window=self.atr_window).mean()
+        atr_pct = atr.iloc[-1] / hist['close'].iloc[-1]
+        
+        # RSI
+        rsi = compute_rsi(hist, n=self.rsi_window)
+        
+        # MACD
+        macd_data = compute_macd(hist)
+
+        # 3. 应用策略规则
+        # 趋势: MA short > MA long
+        if ma_short.iloc[-1] < ma_long.iloc[-1]:
+            return False
+            
+        # 趋势稳定性: 过去 trend_stability_window 天内，MA short 始终 > MA long
+        trend_stable = (ma_short.iloc[-self.trend_stability_window:] > ma_long.iloc[-self.trend_stability_window:]).all()
+        if not trend_stable:
+            return False
+            
+        # 低波动性: ATR百分比低于阈值
+        if atr_pct > self.max_atr_pct:
+            return False
+            
+        # 动量: RSI > 阈值
+        if rsi.iloc[-1] < self.rsi_threshold:
+            return False
+            
+        # MACD 确认: DIF > DEA and DIF > 0
+        if not (macd_data['DIF'].iloc[-1] > macd_data['DEA'].iloc[-1] and macd_data['DIF'].iloc[-1] > 0):
+            return False
+            
+        return True
+
+    def select(
+        self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]
+    ) -> List[Dict[str, Any]]:
+        """根据长线价值策略筛选股票"""
+        selected_stocks = []
+        for stock_code, df in data.items():
+            hist = df[df["date"] <= date].copy()
+            if self._passes_filters(hist):
+                # 注意：这里的 price_params 是一个空字典，因为独立选择器没有自己的价格参数
+                # 在 CombinedStrategySelector 中使用时，会传递全局的价格参数
+                prices = calculate_price_suggestions(stock_code, date, data, {})
+                details = {
+                    'code': stock_code,
+                    'score': None,  # 独立选择器不计算分数
+                    'risk_reward_ratio': 0, # 独立选择器不计算
+                    'prices': prices
+                }
+                selected_stocks.append(details)
+        return selected_stocks
+
+
 class CombinedStrategySelector:
     """
     一个组合多个策略并根据加权分数进行选择的元选择器。
@@ -688,7 +789,8 @@ class CombinedStrategySelector:
         "breakout": BreakoutVolumeKDJSelector,
         "bollinger": BollingerBandsSelector,
         "goldencross": GoldenCrossSelector,
-        "obv": OBVSelector
+        "obv": OBVSelector,
+        "long_term": LongTermValueSelector
     }
 
     def __init__(self, score_threshold: float = 1.0, weights: Optional[Dict[str, float]] = None, top_n: Optional[int] = None, price_params: Optional[Dict[str, Any]] = None, **kwargs):

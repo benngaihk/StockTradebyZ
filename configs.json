@@ -3,7 +3,7 @@
     {
       "class": "CombinedStrategySelector",
       "alias": "综合评分策略",
-      "activate": true,
+      "activate": false,
       "params": {
         "score_threshold": 1.6,
         "price_params": {
@@ -25,6 +25,21 @@
         "bollinger": {},
         "goldencross": {},
         "obv": {}
+      }
+    },
+    {
+      "class": "LongTermValueSelector",
+      "alias": "长线价值策略",
+      "activate": true,
+      "params": {
+        "ma_short": 50,
+        "ma_long": 200,
+        "trend_stability_window": 20,
+        "atr_window": 20,
+        "max_atr_pct": 0.05,
+        "rsi_window": 14,
+        "rsi_threshold": 50,
+        "min_avg_amount": 100000000
       }
     },
     {
