@@ -84,7 +84,7 @@ def calculate_price_suggestions(stock_code: str, trade_date: pd.Timestamp, data:
     
     # 计算价格建议
     # 入场价：当前收盘价附近，略低于收盘价以获得更好入场点
-    entry_price = min(current_close * 0.99, (current_close + current_low) / 2)
+    entry_price = current_close
     
     # 离场价：基于阻力位或10-12%收益目标
     resistance_target = min(resistance_level, current_close * 1.12)
@@ -140,6 +140,8 @@ def load_data(data_dir: Path, codes: Iterable[str]) -> Dict[str, pd.DataFrame]:
         
         # 修复 'volume.1' -> 'amount' 的问题
         if 'volume.1' in df.columns:
+            if 'amount' in df.columns:
+                df = df.drop(columns=['amount'])
             df = df.rename(columns={'volume.1': 'amount'})
             
         # 防御性检查：确保 amount 列存在

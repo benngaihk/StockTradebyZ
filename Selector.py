@@ -449,24 +449,32 @@ class CombinedStrategySelector:
         self.s1 = BBIKDJSelector(**kwargs.get('bbikdj', {}))
         self.s2 = MACDGoldenCrossSelector(**kwargs.get('macd', {}))
         self.s3 = RSIOversoldSelector(**kwargs.get('rsi', {}))
+        self.s4 = BreakoutVolumeKDJSelector(**kwargs.get('breakout', {}))
 
     def select(self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> List[str]:
-        picks: List[str] = []
+        picks = []
+        # --- 调试日期 ---
+        debug_dates_str = ["2025-07-01", "2025-07-02"]
+
         for code, df in data.items():
-            hist = df[df["date"] <= date]
-            if hist.empty:
+            hist = df[df["date"] <= date].copy()
+            if len(hist) < 20:  # 确保有足够数据
                 continue
 
-            score = 0
-            # 为防止子选择器修改DataFrame，传入副本
-            if self.s1._passes_filters(hist.copy()):
-                score += 1
-            if self.s2._passes_filters(hist.copy()):
-                score += 1
-            if self.s3._passes_filters(hist.copy()):
-                score += 1
+            s1_pass = self.s1._passes_filters(hist.copy())
+            s2_pass = self.s2._passes_filters(hist.copy())
+            s3_pass = self.s3._passes_filters(hist.copy())
+            s4_pass = self.s4._passes_filters(hist.copy())
             
+            score = int(s1_pass) + int(s2_pass) + int(s3_pass) + int(s4_pass)
+            
+            # --- 精准调试打印 (使用字符串比较) ---
+            if date.strftime('%Y-%m-%d') in debug_dates_str:
+                # 重点关注被选出的股票, 或任意几只用于对比
+                if score >= self.score_threshold or code in ['002955', '600129', '002605']: 
+                     print(f"[DEBUG {date.date()}] Stock: {code} | Score: {score} | "
+                           f"S1(BBIKDJ):{s1_pass}, S2(MACD):{s2_pass}, S3(RSI):{s3_pass}, S4(Breakout):{s4_pass}")
+
             if score >= self.score_threshold:
                 picks.append(code)
-        
         return picks

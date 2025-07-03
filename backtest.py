@@ -26,26 +26,37 @@ class StrategyBacktest:
         self.config_path = config_path
         self.data = self._load_data()
         self.selector_configs = load_config(config_path)
+        self.trading_calendar = self._initialize_trading_calendar()
         
         # 回测结果存储
         self.daily_results = []  # 每日选股结果
         self.performance_stats = defaultdict(list)  # 策略表现统计
         
+    def _initialize_trading_calendar(self) -> pd.DatetimeIndex:
+        """
+        基于所有数据，初始化一个全局的交易日历.
+        此方法只在回测开始时调用一次，以保证准确性与性能.
+        """
+        if not self.data:
+            return pd.DatetimeIndex([])
+            
+        print("🗓️ 正在初始化交易日历...")
+        all_dates_series = pd.to_datetime(
+            pd.concat([df["date"] for df in self.data.values()])
+        ).unique()
+        calendar = pd.DatetimeIndex(all_dates_series).sort_values()
+        print("✅ 交易日历初始化完成！")
+        return calendar
+
     def _load_data(self) -> Dict[str, pd.DataFrame]:
         """加载所有股票数据"""
         codes = [f.stem for f in self.data_dir.glob("*.csv")]
         return load_data(self.data_dir, codes)
     
     def _get_trading_dates(self, end_date: datetime, days: int) -> List[datetime]:
-        """获取过去N个交易日的日期列表, 基于真实数据"""
-        # 从任意一个股票数据中提取所有日期作为交易日历
-        all_dates_series = pd.to_datetime(pd.concat(
-            [df['date'] for df in self.data.values()]
-        ).unique())
-        all_dates = pd.DatetimeIndex(all_dates_series).sort_values()
-        
+        """获取过去N个交易日的日期列表, 基于预先计算好的交易日历"""
         # 筛选出在结束日期之前的日期
-        trading_calendar = all_dates[all_dates <= end_date]
+        trading_calendar = self.trading_calendar[self.trading_calendar <= end_date]
         
         if len(trading_calendar) < days:
             print(f"⚠️ 警告: 请求回测 {days} 天, 但可用交易日只有 {len(trading_calendar)} 天。")
@@ -96,7 +107,8 @@ class StrategyBacktest:
             # 条件：当日最低价 <= 建议入场价
             if day["low"] <= entry_price:
                 entry_day_data = day
-                buy_price = entry_price  # 假设以建议入场价买入
+                # 模拟买入价：如果开盘就低于建议价，以开盘价成交；否则以建议价成交
+                buy_price = min(day["open"], entry_price)
                 entry_day_index = i
                 break
 
@@ -196,6 +208,7 @@ class StrategyBacktest:
                             "no_data_after",
                             "not_closed",
                             "no_data",
+                            "invalid_buy_price",
                         ]:
                             trades.append(trade_result)
                     

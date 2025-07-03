@@ -98,6 +98,10 @@ python fetch_kline.py \
 
 ### 运行选股
 
+```bash 
+source venv/bin/activate && python select_stock.py
+```
+
 ```bash
 python select_stock.py \
   --data-dir ./data        # CSV 行情目录

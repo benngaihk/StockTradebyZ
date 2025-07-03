@@ -14,7 +14,7 @@ echo "📊 第一步：更新股票行情数据..."
 python fetch_kline.py \
   --datasource mootdx \
   --frequency 4 \
-  --exclude-gem True \
+  --exclude-gem \
   --min-mktcap 5e9 \
   --max-mktcap 1e20 \
   --start today \
