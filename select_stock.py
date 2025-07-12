@@ -29,12 +29,14 @@ logger = logging.getLogger("select")
 
 def format_stock_with_prices(stock_info: Dict[str, Any]) -> str:
     """
-    格式化股票信息，包含价格建议
+    格式化股票信息，包含价格建议和ML预测
     """
     stock_code = stock_info['code']
     score = stock_info.get('score')
     prices = stock_info['prices']
     risk_reward_ratio = stock_info.get('risk_reward_ratio', 0)
+    ml_probability = stock_info.get('ml_probability')
+    confidence_level = stock_info.get('confidence_level', '')
     
     if prices.get("entry_price", 0) == 0:
         return f"{stock_code} (无价格数据)"
@@ -44,8 +46,15 @@ def format_stock_with_prices(stock_info: Dict[str, Any]) -> str:
     potential_loss = (prices["entry_price"] - prices["stop_loss"]) / prices["entry_price"] * 100
     
     score_str = f"| 得分: {score:.2f} " if score is not None else ""
+    
+    # 增强ML预测显示
+    if ml_probability is not None:
+        confidence_icon = "🔥" if ml_probability >= 0.8 else "⚡" if ml_probability >= 0.7 else "📈"
+        ml_str = f"| {confidence_icon}ML: {ml_probability:.1%}({confidence_level}) "
+    else:
+        ml_str = ""
 
-    return (f"{stock_code} {score_str}| "
+    return (f"{stock_code} {score_str}{ml_str}| "
             f"基于日期: {prices['actual_date']} | "
             f"入场: ¥{prices['entry_price']} | "
             f"离场: ¥{prices['exit_price']} | " 

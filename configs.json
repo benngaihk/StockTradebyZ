@@ -3,9 +3,9 @@
     {
       "class": "CombinedStrategySelector",
       "alias": "综合评分策略",
-      "activate": false,
+      "activate": true,
       "params": {
-        "score_threshold": 1.6,
+        "score_threshold": 1.5,
         "price_params": {
           "profit_target_min_pct": 0.10,
           "profit_target_max_pct": null

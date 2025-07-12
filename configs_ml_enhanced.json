@@ -1,0 +1,63 @@
+{
+  "selectors": [
+    {
+      "class": "MLEnhancedCombinedSelector",
+      "alias": "ML增强综合策略",
+      "activate": true,
+      "params": {
+        "base_selector_config": {
+          "class": "CombinedStrategySelector",
+          "params": {
+            "score_threshold": 1.0,
+            "top_n": 30,
+            "price_params": {
+              "profit_target_min_pct": 0.12,
+              "profit_target_max_pct": null
+            },
+            "weights": {
+              "bbikdj": 1.0,
+              "macd": 0.8,
+              "rsi": 0.6,
+              "breakout": 0.0,
+              "bollinger": 0.7,
+              "goldencross": 1.2,
+              "obv": 0.8
+            },
+            "bbikdj": {
+              "j_threshold": 0,
+              "bbi_min_window": 20,
+              "max_window": 50,
+              "price_range_pct": 0.6,
+              "bbi_q_threshold": 0.08,
+              "j_q_threshold": 0.12
+            },
+            "macd": {},
+            "rsi": {
+              "n": 14,
+              "threshold": 35
+            },
+            "bollinger": {
+              "window": 20,
+              "std_dev": 2
+            },
+            "goldencross": {
+              "short_window": 10,
+              "long_window": 30
+            },
+            "obv": {
+              "ma_window": 20
+            }
+          }
+        },
+        "ml_predictor_config": {
+          "model_path": "./lstm_model.h5",
+          "sequence_length": 20,
+          "epochs": 30,
+          "batch_size": 32
+        },
+        "ml_threshold": 0.65,
+        "ml_weight": 0.4
+      }
+    }
+  ]
+} 

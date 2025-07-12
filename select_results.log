@@ -2156,3 +2156,5 @@
    002838 | 基于日期: 2025-07-03 (估算) | 入场: ¥18.24 | 离场: ¥20.06 | 止损: ¥17.34 | 预期收益: +10.0% | 风险: 4.9% | 收益风险比: 0.0
    603799 | 基于日期: 2025-07-03 (估算) | 入场: ¥38.42 | 离场: ¥42.26 | 止损: ¥36.9 | 预期收益: +10.0% | 风险: 4.0% | 收益风险比: 0.0
    601398 | 基于日期: 2025-07-03 (估算) | 入场: ¥7.64 | 离场: ¥8.4 | 止损: ¥7.46 | 预期收益: +9.9% | 风险: 2.4% | 收益风险比: 0.0
+2025-07-12 21:08:29,122 [WARNING] You are saving your model as an HDF5 file via `model.save()` or `keras.saving.save_model(model)`. This file format is considered legacy. We recommend using instead the native Keras format, e.g. `model.save('my_model.keras')` or `keras.saving.save_model(model, 'my_model.keras')`. 
+2025-07-12 22:20:32,998 [WARNING] Compiled the loaded model, but the compiled metrics have yet to be built. `model.compile_metrics` will be empty until you train or evaluate the model.

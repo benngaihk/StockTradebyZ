@@ -860,3 +860,176 @@ class CombinedStrategySelector:
             return sorted_stocks[:self.top_n]
         else:
             return [s for s in sorted_stocks if s['score'] >= self.score_threshold]
+
+
+class MLEnhancedCombinedSelector:
+    """
+    ML增强的组合选股器
+    结合传统技术指标和机器学习预测
+    """
+    
+    def __init__(self, base_selector_config: Dict[str, Any], ml_predictor_config: Dict[str, Any], 
+                 ml_threshold: float = 0.6, ml_weight: float = 0.3):
+        """
+        初始化ML增强选股器
+        
+        Args:
+            base_selector_config: 基础选股器配置
+            ml_predictor_config: ML预测器配置
+            ml_threshold: ML预测阈值
+            ml_weight: ML权重
+        """
+        self.ml_threshold = ml_threshold
+        self.ml_weight = ml_weight
+        self.ml_predictor = None
+        self.ml_predictor_config = ml_predictor_config
+        
+        # 初始化基础选股器
+        base_class_name = base_selector_config.get("class")
+        if base_class_name == "CombinedStrategySelector":
+            self.base_selector = CombinedStrategySelector(**base_selector_config.get("params", {}))
+        else:
+            raise ValueError(f"不支持的基础选股器类型: {base_class_name}")
+    
+    def _load_ml_predictor(self, data):
+        """加载或训练ML预测器"""
+        if self.ml_predictor is not None:
+            return
+            
+        try:
+            from ml_predictor import LSTMStockPredictor
+            
+            model_path = self.ml_predictor_config.get("model_path", "./lstm_model.h5")
+            
+            self.ml_predictor = LSTMStockPredictor(
+                sequence_length=self.ml_predictor_config.get("sequence_length", 20),
+                epochs=self.ml_predictor_config.get("epochs", 30),
+                batch_size=self.ml_predictor_config.get("batch_size", 32)
+            )
+            
+            # 尝试加载现有模型
+            try:
+                import os
+                if os.path.exists(model_path):
+                    self.ml_predictor.load_model(model_path)
+                    print(f"✅ 已加载现有ML模型: {model_path}")
+                else:
+                    print(f"⚠️  模型文件不存在: {model_path}")
+                    print("🚀 开始训练新的ML模型...")
+                    
+                    # 训练新模型
+                    self.ml_predictor.train(data, min_samples=500)
+                    self.ml_predictor.save_model(model_path)
+                    print(f"✅ 新模型已保存: {model_path}")
+                    
+            except Exception as e:
+                print(f"⚠️  加载模型失败: {e}")
+                print("🚀 开始训练新的ML模型...")
+                
+                # 训练新模型
+                self.ml_predictor.train(data, min_samples=500)
+                self.ml_predictor.save_model(model_path)
+                print(f"✅ 新模型已保存: {model_path}")
+                
+        except ImportError:
+            print("❌ 无法导入ML预测器，将使用基础选股器")
+            self.ml_predictor = None
+        except Exception as e:
+            print(f"❌ ML预测器初始化失败: {e}")
+            self.ml_predictor = None
+    
+    def select(self, date: pd.Timestamp, data: Dict[str, pd.DataFrame]) -> List[Dict[str, Any]]:
+        """
+        ML增强选股方法
+        
+        Args:
+            date: 选股日期
+            data: 股票数据字典
+            
+        Returns:
+            选中的股票列表
+        """
+        # 获取基础选股结果
+        base_picks = self.base_selector.select(date, data)
+        
+        # 如果没有ML预测器，直接返回基础结果
+        if self.ml_predictor is None:
+            self._load_ml_predictor(data)
+            if self.ml_predictor is None:
+                return base_picks
+        
+        # 使用ML增强选股结果
+        enhanced_picks = []
+        ml_predictions = []
+        
+        print(f"🤖 开始ML增强选股分析 (基础候选: {len(base_picks)}只)")
+        
+        for pick in base_picks:
+            stock_code = pick['code']
+            if stock_code in data:
+                try:
+                    # 获取ML预测概率
+                    hist_data = data[stock_code][data[stock_code]['date'] <= date]
+                    ml_prob = self.ml_predictor.predict_probability(hist_data)
+                    
+                    # 只保留ML预测概率高于阈值的股票
+                    if ml_prob >= self.ml_threshold:
+                        original_score = pick.get('score', 0)
+                        
+                        # 计算综合评分：基础评分 * (1 + ML权重 * ML概率)
+                        enhanced_score = original_score * (1 + self.ml_weight * ml_prob)
+                        
+                        # 额外的ML置信度加权
+                        confidence_bonus = 0
+                        if ml_prob >= 0.8:  # 高置信度
+                            confidence_bonus = 0.5
+                        elif ml_prob >= 0.7:  # 中高置信度
+                            confidence_bonus = 0.3
+                        elif ml_prob >= self.ml_threshold:  # 达到阈值
+                            confidence_bonus = 0.1
+                        
+                        final_score = enhanced_score + confidence_bonus
+                        
+                        pick['score'] = final_score
+                        pick['ml_probability'] = ml_prob
+                        pick['confidence_level'] = self._get_confidence_level(ml_prob)
+                        enhanced_picks.append(pick)
+                        
+                        ml_predictions.append({
+                            'code': stock_code,
+                            'prob': ml_prob,
+                            'score': final_score
+                        })
+                        
+                except Exception as e:
+                    print(f"处理股票 {stock_code} 的ML预测时出错: {e}")
+                    # 出错时不添加到最终结果
+                    continue
+        
+        # 按照ML预测概率和综合评分排序
+        enhanced_picks.sort(key=lambda x: (x.get('ml_probability', 0), x.get('score', 0)), reverse=True)
+        
+        # 打印ML预测统计
+        if ml_predictions:
+            high_confidence = sum(1 for p in ml_predictions if p['prob'] >= 0.8)
+            medium_confidence = sum(1 for p in ml_predictions if 0.7 <= p['prob'] < 0.8)
+            low_confidence = sum(1 for p in ml_predictions if self.ml_threshold <= p['prob'] < 0.7)
+            
+            print(f"📊 ML预测统计:")
+            print(f"   高置信度 (≥80%): {high_confidence}只")
+            print(f"   中置信度 (70-80%): {medium_confidence}只")
+            print(f"   低置信度 ({self.ml_threshold*100:.0f}-70%): {low_confidence}只")
+            print(f"   最终筛选: {len(enhanced_picks)}只")
+        
+        return enhanced_picks
+    
+    def _get_confidence_level(self, prob: float) -> str:
+        """获取置信度等级"""
+        if prob >= 0.8:
+            return "高"
+        elif prob >= 0.7:
+            return "中高"
+        elif prob >= self.ml_threshold:
+            return "中"
+        else:
+            return "低"
